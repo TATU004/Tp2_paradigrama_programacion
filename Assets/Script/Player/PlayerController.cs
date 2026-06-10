@@ -53,7 +53,7 @@ public class PlayerController : MonoBehaviour
     private bool canSkill = true;
     private bool isSkilling;
 
-    [Header("画面反馈(受伤抖动)")]
+    [Header("画面反馈")]
     private Transform mainCameraTransform; 
     public float shakeDuration = 0.2f;     
     public float shakeMagnitude = 0.15f;   
@@ -65,7 +65,12 @@ public class PlayerController : MonoBehaviour
     public AudioClip hitSFX;   
     public AudioClip dashSFX;  
     public AudioClip skillSFX; 
-    public AudioClip hurtSFX; // 受伤音效槽位
+    public AudioClip hurtSFX; 
+
+    [Header("PowerUp 强化状态")]
+    public GameObject shieldVisual; // 拖入玩家子物体中的半透明护盾图片
+    private bool isInvincible = false;
+    private bool isSuperBuffed = false;
 
     private int maxHealth = 100;
     private int currentHealth;
@@ -75,13 +80,13 @@ public class PlayerController : MonoBehaviour
         rb = GetComponent<Rigidbody2D>();
         audioSource = GetComponent<AudioSource>();
         viewCamera = Camera.main; 
-        
         if (viewCamera != null) mainCameraTransform = viewCamera.transform;
 
         currentHealth = maxHealth;
         UpdateHealthUI();
         UpdateDashUI(1f);
         UpdateSkillUI(1f);
+        if (shieldVisual != null) shieldVisual.SetActive(false);
 
         if (enemyLayers == 0) enemyLayers = LayerMask.GetMask("Enemy");
     }
@@ -90,7 +95,7 @@ public class PlayerController : MonoBehaviour
     {
         HandleTimers();
 
-        if (isDashing || isAttacking || isSkilling)
+        if (isDashing || isSkilling)
         {
             moveInput = Vector2.zero;
             return;
@@ -109,15 +114,20 @@ public class PlayerController : MonoBehaviour
     void FixedUpdate()
     {
         if (isDashing || isSkilling) return;
-        rb.MovePosition(rb.position + moveInput * moveSpeed * Time.fixedDeltaTime);
+        // 如果处于SuperBuff状态，速度提升50%
+        float currentSpeed = isSuperBuffed ? moveSpeed * 1.5f : moveSpeed;
+        rb.MovePosition(rb.position + moveInput * currentSpeed * Time.fixedDeltaTime);
     }
 
     void HandleTimers()
     {
+        float currentDashCD = isSuperBuffed ? dashCooldown * 0.5f : dashCooldown;
+        float currentSkillCD = isSuperBuffed ? skillCooldown * 0.5f : skillCooldown;
+
         if (dashCooldownTimer > 0)
         {
             dashCooldownTimer -= Time.deltaTime;
-            UpdateDashUI(1f - (dashCooldownTimer / dashCooldown));
+            UpdateDashUI(1f - (dashCooldownTimer / currentDashCD));
             if (dashText != null) dashText.text = Mathf.Max(0f, dashCooldownTimer).ToString("F1") + "s";
         }
         else if (!isDashing)
@@ -130,7 +140,7 @@ public class PlayerController : MonoBehaviour
         if (skillCooldownTimer > 0)
         {
             skillCooldownTimer -= Time.deltaTime;
-            UpdateSkillUI(1f - (skillCooldownTimer / skillCooldown));
+            UpdateSkillUI(1f - (skillCooldownTimer / currentSkillCD));
             if (skillText != null) skillText.text = Mathf.Max(0f, skillCooldownTimer).ToString("F1") + "s";
         }
         else if (!isSkilling)
@@ -151,15 +161,8 @@ public class PlayerController : MonoBehaviour
         if (healthText != null) healthText.text = currentHealth + " / " + maxHealth;
     }
 
-    void UpdateDashUI(float ratio)
-    {
-        if (dashFillRect != null) dashFillRect.sizeDelta = new Vector2(dashBarFullWidth * ratio, dashFillRect.sizeDelta.y);
-    }
-
-    void UpdateSkillUI(float ratio)
-    {
-        if (skillFillRect != null) skillFillRect.sizeDelta = new Vector2(skillBarFullWidth * ratio, skillFillRect.sizeDelta.y);
-    }
+    void UpdateDashUI(float ratio) { if (dashFillRect != null) dashFillRect.sizeDelta = new Vector2(dashBarFullWidth * ratio, dashFillRect.sizeDelta.y); }
+    void UpdateSkillUI(float ratio) { if (skillFillRect != null) skillFillRect.sizeDelta = new Vector2(skillBarFullWidth * ratio, skillFillRect.sizeDelta.y); }
 
     IEnumerator Dash()
     {
@@ -171,7 +174,7 @@ public class PlayerController : MonoBehaviour
         yield return new WaitForSeconds(dashDuration);
         rb.linearVelocity = Vector2.zero;
         isDashing = false;
-        dashCooldownTimer = dashCooldown;
+        dashCooldownTimer = isSuperBuffed ? dashCooldown * 0.5f : dashCooldown;
     }
     
     IEnumerator Attack()
@@ -188,7 +191,6 @@ public class PlayerController : MonoBehaviour
         }
         
         Collider2D[] hitEnemies = Physics2D.OverlapCircleAll(finalAttackPoint, attackRange * 0.5f, enemyLayers);
-        
         if (hitEnemies.Length > 0)
         {
             if (audioSource != null && hitSFX != null) audioSource.PlayOneShot(hitSFX);
@@ -203,7 +205,8 @@ public class PlayerController : MonoBehaviour
             if (audioSource != null && swingSFX != null) audioSource.PlayOneShot(swingSFX);
         }
 
-        yield return new WaitForSeconds(attackCooldown);
+        // 如果SuperBuff，攻击间隔减半
+        yield return new WaitForSeconds(isSuperBuffed ? attackCooldown * 0.5f : attackCooldown);
         isAttacking = false;
     }
 
@@ -229,49 +232,69 @@ public class PlayerController : MonoBehaviour
 
         yield return new WaitForSeconds(0.3f); 
         isSkilling = false;
-        skillCooldownTimer = skillCooldown;
+        skillCooldownTimer = isSuperBuffed ? skillCooldown * 0.5f : skillCooldown;
     }
 
-    // --- 摄像头颤抖协程 ---
     IEnumerator ShakeCamera()
     {
         if (isShaking || mainCameraTransform == null) yield break;
         isShaking = true;
-
-        // 记录 Main Camera 相对于 Holder 的初始本地坐标 (应该是 0,0,-10)
         Vector3 originalLocalPos = mainCameraTransform.localPosition;
         float elapsed = 0.0f;
-
         while (elapsed < shakeDuration)
         {
-            // 生成随机偏移，2D场景抖动XY即可
             float x = Random.Range(-1f, 1f) * shakeMagnitude;
             float y = Random.Range(-1f, 1f) * shakeMagnitude;
-
-            // 应用本地坐标偏移
             mainCameraTransform.localPosition = originalLocalPos + new Vector3(x, y, 0f);
-
             elapsed += Time.deltaTime;
             yield return null;
         }
-
-        // 结束后恢复原位
         mainCameraTransform.localPosition = originalLocalPos;
         isShaking = false;
     }
 
+    // --- 外部道具激活接口 ---
+    public void ActivateShield(float duration) { StartCoroutine(ShieldRoutine(duration)); }
+    public void Heal(int amount) { currentHealth = Mathf.Min(maxHealth, currentHealth + amount); UpdateHealthUI(); }
+    public void ActivateSuperBuff(float duration) { StartCoroutine(SuperBuffRoutine(duration)); }
+
+    IEnumerator ShieldRoutine(float duration)
+    {
+        isInvincible = true;
+        if (shieldVisual != null) shieldVisual.SetActive(true);
+        yield return new WaitForSeconds(duration);
+        if (shieldVisual != null) shieldVisual.SetActive(false);
+        isInvincible = false;
+    }
+
+    IEnumerator SuperBuffRoutine(float duration)
+    {
+        isSuperBuffed = true;
+        yield return new WaitForSeconds(duration);
+        isSuperBuffed = false;
+    }
+
     public void TakeDamage(int damage)
     {
+        if (isInvincible) return; // 无敌时不扣血
+
         currentHealth -= damage;
         UpdateHealthUI();
-
-        // 受伤音效
         if (audioSource != null && hurtSFX != null) audioSource.PlayOneShot(hurtSFX);
+        if (currentHealth > 0) StartCoroutine(ShakeCamera());
+    }
 
-        // 触发摄像机颤抖
-        if (currentHealth > 0)
+    // 当敌人撞击带盾玩家时触发弹开
+    void OnCollisionEnter2D(Collision2D collision)
+    {
+        if (isInvincible && collision.gameObject.CompareTag("Enemy"))
         {
-            StartCoroutine(ShakeCamera());
+            Rigidbody2D enemyRb = collision.gameObject.GetComponent<Rigidbody2D>();
+            if (enemyRb != null)
+            {
+                Vector2 bounceDirection = (collision.transform.position - transform.position).normalized;
+                enemyRb.linearVelocity = bounceDirection * 12f; // 弹开力度
+            }
         }
     }
 
