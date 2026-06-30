@@ -14,6 +14,9 @@ public class PlayerController : MonoBehaviour
     private Vector2 mousePos;
     private Camera viewCamera;
 
+    // --- 新增：动画控制器 ---
+    private Animator anim;
+
     [Header("玩家UI Rect")]
     public RectTransform healthFillRect; 
     public RectTransform dashFillRect;
@@ -68,7 +71,7 @@ public class PlayerController : MonoBehaviour
     public AudioClip hurtSFX; 
 
     [Header("PowerUp 强化状态")]
-    public GameObject shieldVisual; // 拖入玩家子物体中的半透明护盾图片
+    public GameObject shieldVisual; 
     private bool isInvincible = false;
     private bool isSuperBuffed = false;
 
@@ -79,6 +82,10 @@ public class PlayerController : MonoBehaviour
     {
         rb = GetComponent<Rigidbody2D>();
         audioSource = GetComponent<AudioSource>();
+        
+        // --- 新增：获取 Animator 组件 ---
+        anim = GetComponent<Animator>();
+
         viewCamera = Camera.main; 
         if (viewCamera != null) mainCameraTransform = viewCamera.transform;
 
@@ -114,7 +121,6 @@ public class PlayerController : MonoBehaviour
     void FixedUpdate()
     {
         if (isDashing || isSkilling) return;
-        // 如果处于SuperBuff状态，速度提升50%
         float currentSpeed = isSuperBuffed ? moveSpeed * 1.5f : moveSpeed;
         rb.MovePosition(rb.position + moveInput * currentSpeed * Time.fixedDeltaTime);
     }
@@ -180,6 +186,10 @@ public class PlayerController : MonoBehaviour
     IEnumerator Attack()
     {
         isAttacking = true;
+        
+        // --- 新增：触发攻击动画 ---
+        anim.SetTrigger("doAttack");
+
         Vector2 attackDirection = (mousePos - (Vector2)attackPoint.position).normalized;
         Vector2 finalAttackPoint = (Vector2)attackPoint.position + attackDirection * attackRange;
 
@@ -205,7 +215,6 @@ public class PlayerController : MonoBehaviour
             if (audioSource != null && swingSFX != null) audioSource.PlayOneShot(swingSFX);
         }
 
-        // 如果SuperBuff，攻击间隔减半
         yield return new WaitForSeconds(isSuperBuffed ? attackCooldown * 0.5f : attackCooldown);
         isAttacking = false;
     }
@@ -215,6 +224,10 @@ public class PlayerController : MonoBehaviour
         canSkill = false;
         isSkilling = true;
         rb.linearVelocity = Vector2.zero; 
+
+        // --- 新增：触发技能动画 ---
+        anim.SetTrigger("doSkill");
+
         if (audioSource != null && skillSFX != null) audioSource.PlayOneShot(skillSFX);
 
         if (skillPrefab != null)
@@ -254,9 +267,24 @@ public class PlayerController : MonoBehaviour
     }
 
     // --- 外部道具激活接口 ---
-    public void ActivateShield(float duration) { StartCoroutine(ShieldRoutine(duration)); }
-    public void Heal(int amount) { currentHealth = Mathf.Min(maxHealth, currentHealth + amount); UpdateHealthUI(); }
-    public void ActivateSuperBuff(float duration) { StartCoroutine(SuperBuffRoutine(duration)); }
+    public void ActivateShield(float duration) 
+    { 
+        anim.SetTrigger("doItem"); // 新增：触发获取道具动画
+        StartCoroutine(ShieldRoutine(duration)); 
+    }
+    
+    public void Heal(int amount) 
+    { 
+        currentHealth = Mathf.Min(maxHealth, currentHealth + amount); 
+        UpdateHealthUI(); 
+        anim.SetTrigger("doItem"); // 新增：触发吃药/道具动画
+    }
+    
+    public void ActivateSuperBuff(float duration) 
+    { 
+        anim.SetTrigger("doItem"); // 新增：触发获取道具动画
+        StartCoroutine(SuperBuffRoutine(duration)); 
+    }
 
     IEnumerator ShieldRoutine(float duration)
     {
@@ -276,15 +304,25 @@ public class PlayerController : MonoBehaviour
 
     public void TakeDamage(int damage)
     {
-        if (isInvincible) return; // 无敌时不扣血
+        if (isInvincible) return;
 
         currentHealth -= damage;
         UpdateHealthUI();
         if (audioSource != null && hurtSFX != null) audioSource.PlayOneShot(hurtSFX);
-        if (currentHealth > 0) StartCoroutine(ShakeCamera());
+        
+        if (currentHealth > 0) 
+        {
+            StartCoroutine(ShakeCamera());
+        }
+        else
+        {
+            // --- 新增：死亡逻辑 ---
+            anim.SetTrigger("doDead"); // 触发死亡动画
+            this.enabled = false;      // 禁用玩家控制脚本，防止死后继续移动或攻击
+            rb.linearVelocity = Vector2.zero; // 让死后的玩家立刻停下来
+        }
     }
 
-    // 当敌人撞击带盾玩家时触发弹开
     void OnCollisionEnter2D(Collision2D collision)
     {
         if (isInvincible && collision.gameObject.CompareTag("Enemy"))
@@ -293,7 +331,7 @@ public class PlayerController : MonoBehaviour
             if (enemyRb != null)
             {
                 Vector2 bounceDirection = (collision.transform.position - transform.position).normalized;
-                enemyRb.linearVelocity = bounceDirection * 12f; // 弹开力度
+                enemyRb.linearVelocity = bounceDirection * 12f; 
             }
         }
     }
